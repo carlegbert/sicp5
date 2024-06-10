@@ -17,4 +17,3 @@
        (not (label-exp? exp))
        (tagged-list? (car exp) 'op)))
 
-
