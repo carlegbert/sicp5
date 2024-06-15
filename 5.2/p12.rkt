@@ -1,5 +1,30 @@
 #lang sicp
 
+(define (filter items pred?)
+  (if (null? items)
+                    '()
+                    (let ((item (car items))
+              (rest (cdr items)))
+          (if (pred? item)
+            (cons item (filter rest pred?))
+            (filter rest pred?)))))
+
+(define (uniq items)
+  ;; horrible but I'm impatient.
+  (if (or (null? items) (null? (cdr items)))
+    items
+    (let* ((item (car items))
+          (rest (uniq (cdr items)))
+          (next (car rest)))
+      (if (equal? item next)
+        rest
+        (cons next (uniq (cons item (cdr rest))))))))
+
+(define (unique-push c item)
+  (cond ((null? (cdr c)) (set-cdr! c (list item)))
+        ((equal? (cadr c) item) 'done)
+        (else (unique-push (cdr c) item))))
+
 (define (tagged-list? items tag)
   (and (list? items) (not (null? items)) (eq? (car items) tag)))
 
@@ -11,6 +36,7 @@
     ((machine 'install-operations) ops)
     ((machine 'install-instruction-sequence)
      (assemble controller-text machine))
+    (machine 'record-instruction-observations)
     machine))
 
 (define (make-register name)
@@ -78,7 +104,13 @@
          (the-ops (list (list 'initialize-stack
                               (lambda () (stack 'initialize)))))
          (register-table
-          (list (list 'pc pc) (list 'flag flag))))
+          (list (list 'pc pc) (list 'flag flag)))
+         (observed-instructions (list '(assign)
+                                      '(branch)
+                                      '(test)
+                                      '(goto)
+                                      '(save)
+                                      '(restore))))
 
     (define (allocate-register name)
       (if (assoc name register-table)
@@ -101,18 +133,66 @@
               ((instruction-execution-proc (car insts)))
               (execute)))))
 
+    (define (record-instruction-observations insts)
+      (if (null? insts)
+          'done
+          (let* ((inst (caar insts))
+                 (instruction-type (car inst))
+                 (collection (assoc instruction-type observed-instructions)))
+            (define
+              (append-to-collection c) (cond ((null? (cdr c)) (set-cdr! c (list inst)))
+                                             ((equal? (cadr c) inst) 'done)
+                                             (else (append-to-collection (cdr c)))))
+            (unique-push collection inst)
+            (record-instruction-observations (cdr insts)))))
+
+    (define (observe-instructions)
+      (apply append (map cdr observed-instructions)))
+
+    (define (observe-entry-points)
+      (let* ((gotos (cdr (assoc 'goto observed-instructions)))
+             (goto-regs (filter gotos (lambda (g) (eq? (caadr g) 'reg)))))
+        (map (lambda (g) (car (cdadr g))) goto-regs)))
+
+    (define (observe-save-and-restores)
+      (let* ((saves (cdr (assoc 'save observed-instructions)))
+             (restores (cdr (assoc 'restore observed-instructions)))
+             (items (append saves restores))
+             (registers (map cadr items)))
+        (uniq registers)))
+
+    (define (observe-assignments)
+      (let* ((assignments (cdr (assoc 'assign observed-instructions)))
+             (registers (map (lambda (x) (list (car x))) register-table)))
+        (define (iter assignments)
+          (if (null? assignments)
+            registers
+            (let* ((item (car assignments))
+                   (reg (assoc (cadr item) registers))
+                   (assignment (cddar assignments))
+                   (rest (cdr assignments)))
+              (unique-push reg assignment)
+              (iter (cdr assignments)))))
+        (iter assignments)))
+
     (define (dispatch message)
       (cond ((eq? message 'start)
              (set-contents! pc the-instruction-sequence)
              (execute))
             ((eq? message 'install-instruction-sequence)
              (lambda (seq) (set! the-instruction-sequence seq)))
+            ((eq? message 'record-instruction-observations)
+             (record-instruction-observations the-instruction-sequence))
             ((eq? message 'allocate-register) allocate-register)
             ((eq? message 'get-register) lookup-register)
             ((eq? message 'install-operations)
              (lambda (ops) (set! the-ops (append the-ops ops))))
             ((eq? message 'stack) stack)
             ((eq? message 'operations) the-ops)
+            ((eq? message 'observe-instructions) observe-instructions)
+            ((eq? message 'observe-entry-points) observe-entry-points)
+            ((eq? message 'observe-save-and-restores) observe-save-and-restores)
+            ((eq? message 'observe-assignments) observe-assignments)
             (else (error "Unknown request -- MACHINE" message))))
     dispatch))
 
@@ -388,3 +468,8 @@
      (assign val (reg n))
      (goto (reg continue))
      fib-done)))
+
+((fib-machine 'observe-instructions))
+((fib-machine 'observe-entry-points))
+((fib-machine 'observe-save-and-restores))
+((fib-machine 'observe-assignments))
